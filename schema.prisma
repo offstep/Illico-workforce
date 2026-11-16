@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────── Enums ─────────
+
+enum WorkerStatus {
+  NEW
+  TRAINING
+  QUIZ_PENDING
+  TRIAL
+  VERIFIED
+  SUSPENDED
+}
+
+enum MissionType {
+  TRIAL
+  STANDARD
+}
+
+enum MissionStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum DeliveryFormat {
+  TEXT
+  FILE
+  TEXT_FILE
+}
+
+enum MissionWorkerStatus {
+  IN_PROGRESS
+  SUBMITTED
+  VALIDATED
+  ABANDONED
+}
+
+enum DeliveryStatus {
+  PREPARING
+  SUBMITTED
+  IN_REVIEW
+  CORRECTION
+  VALIDATED
+  CANCELLED
+}
+
+// ───────── Config serveur ─────────
+
+// Stocke les IDs des salons/rôles créés par /setup-illico
+model GuildConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ───────── Utilisateurs ─────────
+
+model User {
+  id        String   @id @default(cuid())
+  discordId String   @unique
+  username  String
+  createdAt DateTime @default(now())
+
+  profile          WorkerProfile?
+  training         TrainingProgress?
+  quizAttempts     QuizAttempt[]
+  missionWorkers   MissionWorker[]
+  deliveries       Delivery[]       @relation("DeliveryWorker")
+  reviewsDone      QualityReview[]  @relation("Reviewer")
+  auditLogs        AuditLog[]       @relation("AuditActor")
+}
+
+model WorkerProfile {
+  id            String       @id @default(cuid())
+  userId        String       @unique
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        WorkerStatus @default(NEW)
+  rulesAccepted Boolean      @default(false)
+  trialStartedAt DateTime?
+  verifiedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+// ───────── Formation & quiz ─────────
+
+model TrainingProgress {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentPage Int       @default(0)
+  completedAt DateTime?
+  updatedAt   DateTime  @updatedAt
+}
+
+model QuizAttempt {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attemptNo    Int
+  currentIndex Int          @default(0)
+  score        Int?
+  total        Int          @default(6)
+  passed       Boolean?
+  startedAt    DateTime     @default(now())
+  finishedAt   DateTime?
+  answers      QuizAnswer[]
+
+  @@unique([userId, attemptNo])
+}
+
+model QuizAnswer {
+  id            String      @id @default(cuid())
+  attemptId     String
+  attempt       QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionIndex Int
+  choice        String // "A" | "B" | "C" | "D"
+  isCorrect     Boolean
+  answeredAt    DateTime    @default(now())
+
+  // Une seule réponse par question et par tentative (anti double-clic)
+  @@unique([attemptId, questionIndex])
+}
+
+// ───────── Missions ─────────
+
+model Mission {
+  id             String         @id @default(cuid())
+  number         Int            @unique @default(autoincrement()) // affiché : #00142
+  type           MissionType    @default(STANDARD)
+  status         MissionStatus  @default(DRAFT)
+  title          String
+  description    String
+  difficulty     String?
+  taskCount      Int
+  reward         Int // en FCFA
+  maxWorkers     Int?
+  deadlineHours  Int? // délai après prise de la mission
+  instructions   String
+  data           Json? // éléments à traiter (ex. les 10 éléments à classer)
+  expectedAnswer Json? // réponse attendue (aide au contrôle QA)
+  deliveryFormat DeliveryFormat @default(TEXT)
+  createdAt      DateTime       @default(now())
+
+  workers MissionWorker[]
+}
+
+model MissionWorker {
+  id         String              @id @default(cuid())
+  missionId  String
+  mission    Mission             @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     MissionWorkerStatus @default(IN_PROGRESS)
+  takenAt    DateTime            @default(now())
+  deadlineAt DateTime?
+
+  deliveries Delivery[]
+
+  @@unique([missionId, userId])
+}
+
+// ───────── Livraisons & QA ─────────
+
+model Delivery {
+  id              String         @id @default(cuid())
+  number          Int            @unique @default(autoincrement()) // affiché : #00142
+  missionWorkerId String
+  missionWorker   MissionWorker  @relation(fields: [missionWorkerId], references: [id], onDelete: Cascade)
+  workerId        String
+  worker          User           @relation("DeliveryWorker", fields: [workerId], references: [id])
+  status          DeliveryStatus @default(PREPARING)
+  channelId       String?        @unique // salon privé du ticket
+  textAnswer      Json? // réponse normalisée (ex. { "1": "PAIEMENT", ... })
+  rawText         String?
+  comment         String?
+  createdAt       DateTime       @default(now())
+  submittedAt     DateTime?
+
+  files   DeliveryFile[]
+  reviews QualityReview[]
+}
+
+model DeliveryFile {
+  id         String   @id @default(cuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  name       String
+  url        String
+  size       Int
+  mimeType   String?
+  createdAt  DateTime @default(now())
+}
+
+model QualityReview {
+  id           String   @id @default(cuid())
+  deliveryId   String
+  delivery     Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  reviewerId   String
+  reviewer     User     @relation("Reviewer", fields: [reviewerId], references: [id])
+  accuracy     Int // 0-100
+  completeness Int
+  instructions Int
+  format       Int
+  score        Int // moyenne calculée par le bot
+  validated    Boolean
+  comment      String?
+  createdAt    DateTime @default(now())
+}
+
+// ───────── Journal d'audit ─────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // ex. "quiz.passed", "role.assigned", "delivery.submitted"
+  actorId   String?
+  actor     User?    @relation("AuditActor", fields: [actorId], references: [id])
+  targetId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([createdAt])
+}
+
+// Payments et Tickets d'assistance : ajoutés après la V1.
