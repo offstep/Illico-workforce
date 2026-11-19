@@ -75,6 +75,7 @@ model User {
   deliveries       Delivery[]       @relation("DeliveryWorker")
   reviewsDone      QualityReview[]  @relation("Reviewer")
   auditLogs        AuditLog[]       @relation("AuditActor")
+  payments         Payment[]
 }
 
 model WorkerProfile {
@@ -163,6 +164,7 @@ model MissionWorker {
   deadlineAt DateTime?
 
   deliveries Delivery[]
+  payments   Payment[]
 
   @@unique([missionId, userId])
 }
@@ -230,4 +232,35 @@ model AuditLog {
   @@index([createdAt])
 }
 
-// Payments et Tickets d'assistance : ajoutés après la V1.
+// ───────── Paiements ─────────
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model Payment {
+  id              String         @id @default(cuid())
+  number          Int            @unique @default(autoincrement())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id])
+  missionWorkerId String?
+  missionWorker   MissionWorker? @relation(fields: [missionWorkerId], references: [id])
+  amount          Int // en FCFA
+  status          PaymentStatus  @default(PENDING)
+  createdAt       DateTime       @default(now())
+  paidAt          DateTime?
+}
+
+// ───────── Accès au dashboard web ─────────
+// Table lue par la fonction SQL is_admin() (policies Supabase).
+// Elle DOIT rester ici, sinon `prisma db push` veut la supprimer.
+
+model AdminEmail {
+  email String @id
+
+  @@map("admin_emails")
+}
+
+// Tickets d'assistance : ajoutés après la V1.
